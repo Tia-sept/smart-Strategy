@@ -26,7 +26,7 @@ LOG_LEVEL = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INF
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Buy event structure
-BuyEvent = namedtuple("BuyEvent", ["timestamp", "buyer", "token_mint", "amount"])
+BuyEvent = namedtuple("BuyEvent", ["timestamp", "buyer", "token_mint", "amount", "market"])
 
 # Parameters
 TIME_WINDOW_SECONDS = 30  # Time window to group events
@@ -42,9 +42,10 @@ LEADER_LOG_COOLDOWN_SECONDS = 300
 last_logged_leader: Dict[str, datetime] = {}
 
 # Constants
-TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+PUMP_FUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+RAYDIUM_AMM_V4_PROGRAM_ID = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
 
 # Helper functions
 def parse_balance_changes(meta) -> Dict[str, Dict[str, Tuple[int, int]]]:
@@ -65,6 +66,24 @@ def parse_balance_changes(meta) -> Dict[str, Dict[str, Tuple[int, int]]]:
         changes[owner][mint] = (pre_amount, post_amount)
 
     return changes
+
+def find_market(account_keys: List[bytes], instructions) -> str:
+    """Identify the DEX market from the transaction instructions."""
+    try:
+        pubkeys = [str(Pubkey(key)) for key in account_keys]
+        for inst in instructions:
+            if hasattr(inst, "program_id_index"):
+                idx = inst.program_id_index
+                if idx < len(pubkeys):
+                    program_id = pubkeys[idx]
+                    if program_id == PUMP_FUN_PROGRAM_ID:
+                        return "PumpFun"
+                    if program_id == RAYDIUM_AMM_V4_PROGRAM_ID:
+                        return "Raydium"
+    except Exception as e:
+        logging.error(f"Error parsing market from instructions: {e}")
+    return "Unknown"
+
 
 def detect_buyers(balance_changes) -> List[Tuple[str, str, int]]:
     """Detect buyers from balance changes."""
@@ -140,7 +159,7 @@ def run():
                 "filter": geyser_pb2.SubscribeRequestFilterTransactions(
                     vote=False,
                     failed=False,
-                    account_include=[TOKEN_PROGRAM_ID]
+                    account_include=[PUMP_FUN_PROGRAM_ID, RAYDIUM_AMM_V4_PROGRAM_ID]
                 )
             },
             commitment=geyser_pb2.CommitmentLevel.FINALIZED
@@ -156,15 +175,21 @@ def run():
                         meta = getattr(inner_tx, "meta", None)
                         now_utc = datetime.now(timezone.utc)
 
-                        if meta:
-                            balance_changes = parse_balance_changes(meta)
-                            buys = detect_buyers(balance_changes)
+                        if meta and hasattr(inner_tx, "transaction"):
+                            tx_body = inner_tx.transaction
+                            if hasattr(tx_body, "message"):
+                                message = tx_body.message
+                                account_keys = list(message.account_keys)
+                                instructions = list(message.instructions)
+                                market = find_market(account_keys, instructions)
+                                balance_changes = parse_balance_changes(meta)
+                                buys = detect_buyers(balance_changes)
 
-                            for buyer, mint, amount in buys:
-                                event = BuyEvent(now_utc, buyer, mint, amount)
-                                recent_buys.append(event)
-                                prune_old_events(now_utc)
-                                find_groups(now_utc, event)
+                                for buyer, mint, amount in buys:
+                                    event = BuyEvent(now_utc, buyer, mint, amount, market)
+                                    recent_buys.append(event)
+                                    prune_old_events(now_utc)
+                                    find_groups(now_utc, event)
 
             except grpc.RpcError as e:
                 print(f"gRPC Error: {e.code()} - {e.details()}. Reconnecting...")
