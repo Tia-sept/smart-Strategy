@@ -1,2 +1,7 @@
 strategy: SequenceStrategy
 params: {}
+
+clickhouse:
+  host: 10.147.17.195
+  port: 19000
+  database: solana

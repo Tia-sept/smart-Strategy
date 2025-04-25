@@ -22,12 +22,17 @@ def main():
     )
     args = parser.parse_args()
     if args.config:
-        print(f"📘 Loading config from {args.config}")
+        print(f"Loading config from {args.config}")
         config = load_config(args.config)
         
     strategy_name = config["strategy"]
     strategy_params = config.get("params", {})
-    client = Client(host='10.147.17.195', port=19000, database='solana')
+    clickhouse_config = config.get("clickhouse", {})
+    client = Client(
+        host=clickhouse_config.get("host", "localhost"),
+        port=clickhouse_config.get("port", ""),
+        database=clickhouse_config.get("database", "default")
+    )
     strategy_cls = STRATEGY_REGISTRY[strategy_name]
     strategy = strategy_cls(client, **strategy_params)
     
