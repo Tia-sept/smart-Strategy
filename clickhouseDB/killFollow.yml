@@ -1,0 +1,3 @@
+strategy: KillFollowStrategy
+params:
+  max_hold_time_sec: 30

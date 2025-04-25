@@ -1,4 +1,3 @@
-# smart_money_detector.py
 import grpc
 import logging
 import os
